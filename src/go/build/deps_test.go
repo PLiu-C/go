@@ -450,7 +450,7 @@ var depsRules = `
 
 	crypto/boring
 	< crypto/aes, crypto/des, crypto/hmac, crypto/md5, crypto/rc4,
-	  crypto/sha1, crypto/sha256, crypto/sha512;
+	  crypto/sha1, crypto/sha256, crypto/sha512, crypto/sm/sm3;
 
 	crypto/boring, crypto/internal/edwards25519/field
 	< crypto/ecdh;
@@ -464,7 +464,8 @@ var depsRules = `
 	crypto/rc4,
 	crypto/sha1,
 	crypto/sha256,
-	crypto/sha512
+	crypto/sha512,
+	crypto/sm/sm3
 	< CRYPTO;
 
 	CGO, fmt, net !< CRYPTO;
@@ -479,7 +480,7 @@ var depsRules = `
 	< golang.org/x/crypto/cryptobyte
 	< crypto/internal/bigmod
 	< crypto/dsa, crypto/elliptic, crypto/rsa
-	< crypto/ecdsa
+	< crypto/ecdsa, crypto/sm/sm2
 	< CRYPTO-MATH;
 
 	CGO, net !< CRYPTO-MATH;

@@ -12,6 +12,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sm/sm2"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -249,11 +251,11 @@ func parsePublicKey(keyData *publicKeyInfo) (any, error) {
 			N: p.N,
 		}
 		return pub, nil
-	case oid.Equal(oidPublicKeyECDSA):
+	case oid.Equal(oidPublicKeyECDSA): // algo for SM2
 		paramsDer := cryptobyte.String(params.FullBytes)
 		namedCurveOID := new(asn1.ObjectIdentifier)
 		if !paramsDer.ReadASN1ObjectIdentifier(namedCurveOID) {
-			return nil, errors.New("x509: invalid ECDSA parameters")
+			return nil, errors.New("x509: invalid ECDSA/SM2 parameters") // PLIU
 		}
 		namedCurve := namedCurveFromOID(*namedCurveOID)
 		if namedCurve == nil {
@@ -262,6 +264,15 @@ func parsePublicKey(keyData *publicKeyInfo) (any, error) {
 		x, y := elliptic.Unmarshal(namedCurve, der)
 		if x == nil {
 			return nil, errors.New("x509: failed to unmarshal elliptic curve point")
+		}
+
+		if namedCurveOID.Equal(oidNamedCurveP256SM2) { // PLIU
+			pub := &sm2.PublicKey{
+				Curve: namedCurve,
+				X:     x,
+				Y:     y,
+			}
+			return pub, nil
 		}
 		pub := &ecdsa.PublicKey{
 			Curve: namedCurve,
@@ -921,6 +932,12 @@ func parseCertificate(der []byte) (*Certificate, error) {
 		return nil, err
 	}
 	cert.PublicKeyAlgorithm = getPublicKeyAlgorithmFromOID(pkAI.Algorithm)
+	// PLIU: ECDSA and SM2 have the same ObjectId, so further check to differentiate them
+	params, _ := asn1.Marshal(oidNamedCurveP256SM2)
+	if cert.PublicKeyAlgorithm == ECDSA && reflect.DeepEqual(params, pkAI.Parameters.FullBytes) {
+		cert.PublicKeyAlgorithm = SM2
+	}
+
 	var spk asn1.BitString
 	if !spki.ReadASN1BitString(&spk) {
 		return nil, errors.New("x509: malformed subjectPublicKey")

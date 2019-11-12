@@ -49,6 +49,8 @@ import (
 	_ "crypto/sha256"
 	_ "crypto/sha512"
 
+	"crypto/sm/sm2"
+
 	"golang.org/x/crypto/cryptobyte"
 	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
 )
@@ -79,10 +81,35 @@ func ParsePKIXPublicKey(derBytes []byte) (pub any, err error) {
 		return nil, errors.New("x509: trailing data after ASN.1 of public-key")
 	}
 	return parsePublicKey(&pki)
+/*===
+	algo := getPublicKeyAlgorithmFromOID(pki.Algorithm.Algorithm)
+	if algo == UnknownPublicKeyAlgorithm {
+		return nil, errors.New("x509: unknown public key algorithm")
+	}
+	// PLIU
+	params, _ := asn1.Marshal(oidNamedCurveP256SM2)
+	if algo == ECDSA && reflect.DeepEqual(params, pki.Algorithm.Parameters.FullBytes) {
+		algo = SM2
+	}
+	return parsePublicKey(algo, &pki)
+>>>*/
 }
 
 func marshalPublicKey(pub any) (publicKeyBytes []byte, publicKeyAlgorithm pkix.AlgorithmIdentifier, err error) {
 	switch pub := pub.(type) {
+	case *sm2.PublicKey:
+		publicKeyBytes = elliptic.Marshal(pub.Curve, pub.X, pub.Y)
+		oid, ok := oidFromNamedCurve(pub.Curve)
+		if !ok {
+			return nil, pkix.AlgorithmIdentifier{}, errors.New("x509: unsupported elliptic curve")
+		}
+		publicKeyAlgorithm.Algorithm = oidPublicKeySM2
+		var paramBytes []byte
+		paramBytes, err = asn1.Marshal(oid)
+		if err != nil {
+			return
+		}
+		publicKeyAlgorithm.Parameters.FullBytes = paramBytes
 	case *rsa.PublicKey:
 		publicKeyBytes, err = asn1.Marshal(pkcs1PublicKey{
 			N: pub.N,
@@ -194,6 +221,14 @@ type dsaAlgorithmParameters struct {
 	P, Q, G *big.Int
 }
 
+type dsaSignature struct {
+	R, S *big.Int
+}
+
+type ecdsaSignature dsaSignature
+
+type sm2Signature dsaSignature
+
 type validity struct {
 	NotBefore, NotAfter time.Time
 }
@@ -230,6 +265,9 @@ const (
 	SHA384WithRSAPSS
 	SHA512WithRSAPSS
 	PureEd25519
+	SM2WithSM3 // PLIU
+	SM2WithSHA1
+	SM2WithSHA256
 )
 
 func (algo SignatureAlgorithm) isRSAPSS() bool {
@@ -258,6 +296,7 @@ const (
 	DSA // Only supported for parsing.
 	ECDSA
 	Ed25519
+	SM2 // PLIU
 )
 
 var publicKeyAlgoName = [...]string{
@@ -265,6 +304,7 @@ var publicKeyAlgoName = [...]string{
 	DSA:     "DSA",
 	ECDSA:   "ECDSA",
 	Ed25519: "Ed25519",
+	SM2:     "SM2", // PLIU
 }
 
 func (algo PublicKeyAlgorithm) String() string {
@@ -350,7 +390,14 @@ var (
 	// but it's specified by ISO. Microsoft's makecert.exe has been known
 	// to produce certificates with this OID.
 	oidISOSignatureSHA1WithRSA = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 29}
+
+	// PLIU: SM2
+	oidSignatureSM2WithSM3    = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 501}
+	oidSignatureSM2WithSHA1   = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 502}
+	oidSignatureSM2WithSHA256 = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 503}
 )
+
+const SM3Hash crypto.Hash = 128
 
 var signatureAlgorithmDetails = []struct {
 	algo       SignatureAlgorithm
@@ -376,6 +423,10 @@ var signatureAlgorithmDetails = []struct {
 	{ECDSAWithSHA384, "ECDSA-SHA384", oidSignatureECDSAWithSHA384, ECDSA, crypto.SHA384},
 	{ECDSAWithSHA512, "ECDSA-SHA512", oidSignatureECDSAWithSHA512, ECDSA, crypto.SHA512},
 	{PureEd25519, "Ed25519", oidSignatureEd25519, Ed25519, crypto.Hash(0) /* no pre-hashing */},
+	// PLIU
+	{SM2WithSM3, "SM2-SM3", oidSignatureSM2WithSM3, SM2, SM3Hash},
+	{SM2WithSHA1, "SM2-SHA1", oidSignatureSM2WithSHA1, SM2, crypto.SHA1},
+	{SM2WithSHA256, "SM2-SHA256", oidSignatureSM2WithSHA256, SM2, crypto.SHA256},
 }
 
 // hashToPSSParameters contains the DER encoded RSA PSS parameters for the
@@ -482,6 +533,7 @@ var (
 	//	id-Ed25519   OBJECT IDENTIFIER ::= { 1 3 101 112 }
 	oidPublicKeyX25519  = asn1.ObjectIdentifier{1, 3, 101, 110}
 	oidPublicKeyEd25519 = asn1.ObjectIdentifier{1, 3, 101, 112}
+	oidPublicKeySM2     = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
 )
 
 // getPublicKeyAlgorithmFromOID returns the exposed PublicKeyAlgorithm
@@ -497,6 +549,8 @@ func getPublicKeyAlgorithmFromOID(oid asn1.ObjectIdentifier) PublicKeyAlgorithm 
 		return ECDSA
 	case oid.Equal(oidPublicKeyEd25519):
 		return Ed25519
+	case oid.Equal(oidPublicKeySM2):
+		return SM2
 	}
 	return UnknownPublicKeyAlgorithm
 }
@@ -518,14 +572,17 @@ func getPublicKeyAlgorithmFromOID(oid asn1.ObjectIdentifier) PublicKeyAlgorithm 
 //
 // NB: secp256r1 is equivalent to prime256v1
 var (
-	oidNamedCurveP224 = asn1.ObjectIdentifier{1, 3, 132, 0, 33}
-	oidNamedCurveP256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
-	oidNamedCurveP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
-	oidNamedCurveP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+	oidNamedCurveP224    = asn1.ObjectIdentifier{1, 3, 132, 0, 33}
+	oidNamedCurveP256    = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+	oidNamedCurveP384    = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+	oidNamedCurveP521    = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+	oidNamedCurveP256SM2 = asn1.ObjectIdentifier{1, 2, 156, 10197, 1, 301}
 )
 
 func namedCurveFromOID(oid asn1.ObjectIdentifier) elliptic.Curve {
 	switch {
+	case oid.Equal(oidNamedCurveP256SM2):
+		return sm2.P256Sm2()
 	case oid.Equal(oidNamedCurveP224):
 		return elliptic.P224()
 	case oid.Equal(oidNamedCurveP256):
@@ -540,6 +597,8 @@ func namedCurveFromOID(oid asn1.ObjectIdentifier) elliptic.Curve {
 
 func oidFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 	switch curve {
+	case sm2.P256Sm2():
+		return oidNamedCurveP256SM2, true
 	case elliptic.P224():
 		return oidNamedCurveP224, true
 	case elliptic.P256():
@@ -901,6 +960,10 @@ func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey
 		}
 	case crypto.MD5:
 		return InsecureAlgorithmError(algo)
+	case SM3Hash:
+		if pubKeyAlgo != SM2 {
+			return ErrUnsupportedAlgorithm
+		}
 	case crypto.SHA1:
 		// SHA-1 signatures are mostly disabled. See go.dev/issue/41682.
 		if !allowSHA1 {
@@ -920,6 +983,25 @@ func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey
 	}
 
 	switch pub := publicKey.(type) {
+	case *sm2.PublicKey:
+		if pubKeyAlgo != SM2 {
+			return signaturePublicKeyAlgoMismatchError(pubKeyAlgo, pub)
+		}
+		sm2Sig := new(sm2Signature)
+		if rest, err := asn1.Unmarshal(signature, sm2Sig); err != nil {
+			return err
+		} else if len(rest) != 0 {
+			return errors.New("x509: trailing data after sm2 signature")
+		}
+		if sm2Sig.R.Sign() <= 0 || sm2Sig.S.Sign() <= 0 {
+			return errors.New("x509: sm2 signature contained zero or negative values")
+		}
+
+		if !sm2.Sm2Verify(pub, signed, nil, sm2Sig.R, sm2Sig.S) {
+			return errors.New("x509: sm2 verification failure")
+		}
+
+		return
 	case *rsa.PublicKey:
 		if pubKeyAlgo != RSA {
 			return signaturePublicKeyAlgoMismatchError(pubKeyAlgo, pub)
@@ -1443,6 +1525,15 @@ func signingParamsForPublicKey(pub any, requestedSigAlgo SignatureAlgorithm) (ha
 	var pubType PublicKeyAlgorithm
 
 	switch pub := pub.(type) {
+	case *sm2.PublicKey:
+		pubType = SM2
+		switch pub.Curve {
+		case sm2.P256Sm2():
+			hashFunc = SM3Hash
+			sigAlgo.Algorithm = oidSignatureSM2WithSM3
+		default:
+			err = errors.New("x509: SM2 unknown elliptic curve")
+		}
 	case *rsa.PublicKey:
 		pubType = RSA
 		hashFunc = crypto.SHA256
@@ -1471,7 +1562,7 @@ func signingParamsForPublicKey(pub any, requestedSigAlgo SignatureAlgorithm) (ha
 		sigAlgo.Algorithm = oidSignatureEd25519
 
 	default:
-		err = errors.New("x509: only RSA, ECDSA and Ed25519 keys supported")
+		err = errors.New("x509: only RSA, ECDSA, SM2 and Ed25519 keys supported")
 	}
 
 	if err != nil {
@@ -1670,9 +1761,8 @@ func CreateCertificate(rand io.Reader, template, parent *Certificate, pub, priv 
 		return nil, err
 	}
 	c.Raw = tbsCertContents
-
 	signed := tbsCertContents
-	if hashFunc != 0 {
+	if hashFunc != 0 && hashFunc != SM3Hash { // PLIU: 255 is SM3
 		h := hashFunc.New()
 		h.Write(signed)
 		signed = h.Sum(nil)
@@ -1794,7 +1884,7 @@ func (c *Certificate) CreateCRL(rand io.Reader, priv any, revokedCerts []pkix.Re
 	}
 
 	signed := tbsCertListContents
-	if hashFunc != 0 {
+	if hashFunc != 0 && hashFunc != SM3Hash {
 		h := hashFunc.New()
 		h.Write(signed)
 		signed = h.Sum(nil)
@@ -2105,7 +2195,7 @@ func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv
 	tbsCSR.Raw = tbsCSRContents
 
 	signed := tbsCSRContents
-	if hashFunc != 0 {
+	if hashFunc != 0 && hashFunc != SM3Hash { // PLIU:
 		h := hashFunc.New()
 		h.Write(signed)
 		signed = h.Sum(nil)
