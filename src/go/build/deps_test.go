@@ -385,7 +385,7 @@ var depsRules = `
 	< crypto/internal/subtle
 	< crypto/cipher
 	< crypto/aes, crypto/des, crypto/hmac, crypto/md5, crypto/rc4,
-	  crypto/sha1, crypto/sha256, crypto/sha512
+	  crypto/sha1, crypto/sha256, crypto/sha512, crypto/sm/sm3
 	< CRYPTO;
 
 	CGO, fmt, net !< CRYPTO;
@@ -401,7 +401,7 @@ var depsRules = `
 	< golang.org/x/crypto/cryptobyte
 	< golang.org/x/crypto/curve25519
 	< crypto/dsa, crypto/elliptic, crypto/rsa
-	< crypto/ecdsa
+	< crypto/ecdsa, crypto/sm/sm2
 	< CRYPTO-MATH;
 
 	CGO, net !< CRYPTO-MATH;
