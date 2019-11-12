@@ -7,6 +7,7 @@ package x509
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sm/sm2"
 	"encoding/asn1"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ type ecPrivateKey struct {
 // ParseECPrivateKey parses an EC private key in SEC 1, ASN.1 DER form.
 //
 // This kind of key is commonly encoded in PEM blocks of type "EC PRIVATE KEY".
-func ParseECPrivateKey(der []byte) (*ecdsa.PrivateKey, error) {
+func ParseECPrivateKey(der []byte) (interface{}, error) {
 	return parseECPrivateKey(nil, der)
 }
 
@@ -65,7 +66,7 @@ func marshalECPrivateKeyWithOID(key *ecdsa.PrivateKey, oid asn1.ObjectIdentifier
 // The OID for the named curve may be provided from another source (such as
 // the PKCS8 container) - if it is provided then use this instead of the OID
 // that may exist in the EC private key structure.
-func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key *ecdsa.PrivateKey, err error) {
+func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key interface{}, err error) {
 	var privKey ecPrivateKey
 	if _, err := asn1.Unmarshal(der, &privKey); err != nil {
 		if _, err := asn1.Unmarshal(der, &pkcs8{}); err == nil {
@@ -95,26 +96,54 @@ func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key *e
 	if k.Cmp(curveOrder) >= 0 {
 		return nil, errors.New("x509: invalid elliptic curve private key value")
 	}
-	priv := new(ecdsa.PrivateKey)
-	priv.Curve = curve
-	priv.D = k
 
-	privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
+	switch curve {
+	case sm2.P256Sm2():
+		priv := new(sm2.PrivateKey)
+		priv.Curve = curve
+		priv.D = k
 
-	// Some private keys have leading zero padding. This is invalid
-	// according to [SEC1], but this code will ignore it.
-	for len(privKey.PrivateKey) > len(privateKey) {
-		if privKey.PrivateKey[0] != 0 {
-			return nil, errors.New("x509: invalid private key length")
+		privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
+
+		// Some private keys have leading zero padding. This is invalid
+		// according to [SEC1], but this code will ignore it.
+		for len(privKey.PrivateKey) > len(privateKey) {
+			if privKey.PrivateKey[0] != 0 {
+				return nil, errors.New("x509: invalid private key length")
+			}
+			privKey.PrivateKey = privKey.PrivateKey[1:]
 		}
-		privKey.PrivateKey = privKey.PrivateKey[1:]
+
+		// Some private keys remove all leading zeros, this is also invalid
+		// according to [SEC1] but since OpenSSL used to do this, we ignore
+		// this too.
+		copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
+		priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
+
+		return priv, nil
+
+	default:
+		priv := new(ecdsa.PrivateKey)
+		priv.Curve = curve
+		priv.D = k
+
+		privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
+
+		// Some private keys have leading zero padding. This is invalid
+		// according to [SEC1], but this code will ignore it.
+		for len(privKey.PrivateKey) > len(privateKey) {
+			if privKey.PrivateKey[0] != 0 {
+				return nil, errors.New("x509: invalid private key length")
+			}
+			privKey.PrivateKey = privKey.PrivateKey[1:]
+		}
+
+		// Some private keys remove all leading zeros, this is also invalid
+		// according to [SEC1] but since OpenSSL used to do this, we ignore
+		// this too.
+		copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
+		priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
+
+		return priv, nil
 	}
-
-	// Some private keys remove all leading zeros, this is also invalid
-	// according to [SEC1] but since OpenSSL used to do this, we ignore
-	// this too.
-	copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
-	priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
-
-	return priv, nil
 }
