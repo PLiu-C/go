@@ -410,9 +410,12 @@ var pkgDeps = map[string][]string{
 	"crypto/x509": {
 		"L4", "CRYPTO-MATH", "OS", "CGO", "crypto/ed25519",
 		"crypto/x509/pkix", "encoding/pem", "encoding/hex", "net", "os/user", "syscall", "net/url",
-		"golang.org/x/crypto/cryptobyte", "golang.org/x/crypto/cryptobyte/asn1",
+		"golang.org/x/crypto/cryptobyte", "golang.org/x/crypto/cryptobyte/asn1", "crypto/sm/sm2",
 	},
 	"crypto/x509/pkix": {"L4", "CRYPTO-MATH", "encoding/hex"},
+
+	"crypto/sm/sm2":    {"L4", "CRYPTO", "crypto/elliptic", "math/big", "encoding/asn1", "crypto/rand", "crypto/sm/sm3"},
+	"crypto/sm/sm3":    {"L3"},
 
 	// Simple net+crypto-aware packages.
 	"mime/multipart": {"L4", "OS", "mime", "crypto/rand", "net/textproto", "mime/quotedprintable"},
