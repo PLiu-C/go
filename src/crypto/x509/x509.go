@@ -36,7 +36,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"hash"
 	"reflect"
 	"crypto/sm/sm2"
 )
