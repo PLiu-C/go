@@ -6,6 +6,7 @@ package x509
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -29,7 +30,8 @@ var ecKeyTests = []struct {
 func TestParseECPrivateKey(t *testing.T) {
 	for i, test := range ecKeyTests {
 		derBytes, _ := hex.DecodeString(test.derHex)
-		key, err := ParseECPrivateKey(derBytes)
+		k, err := ParseECPrivateKey(derBytes)
+		key := k.(*ecdsa.PrivateKey)
 		if err != nil {
 			t.Fatalf("#%d: failed to decode EC private key: %s", i, err)
 		}
