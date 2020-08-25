@@ -1,3 +1,18 @@
+/*
+Copyright Suzhou Tongji Fintech Research Institute 2017 All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package sm2
 
 // reference to ecdsa
@@ -18,7 +33,7 @@ import (
 )
 
 var (
-	defaultUID = []byte{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38}
+	default_uid = []byte{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38}
 )
 
 const (
@@ -37,6 +52,12 @@ type PrivateKey struct {
 
 type sm2Signature struct {
 	R, S *big.Int
+}
+type sm2Cipher struct {
+	XCoordinate *big.Int
+	YCoordinate *big.Int
+	HASH        []byte
+	CipherText  []byte
 }
 
 // The SM2's private key contains the public key
@@ -61,7 +82,7 @@ func SignDataToSignDigit(sign []byte) (*big.Int, *big.Int, error) {
 // sign format = 30 + len(z) + 02 + len(r) + r + 02 + len(s) + s, z being what follows its size, ie 02+len(r)+r+02+len(s)+s
 func (priv *PrivateKey) Sign(rand io.Reader, msg []byte, opts crypto.SignerOpts) ([]byte, error) {
 	// r, s, err := Sign(priv, msg)
-	r, s, err := Sm2Sign(priv, msg, nil)
+	r, s, err := Sm2Sign(priv, msg, default_uid)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +90,7 @@ func (priv *PrivateKey) Sign(rand io.Reader, msg []byte, opts crypto.SignerOpts)
 }
 
 func (priv *PrivateKey) Decrypt(data []byte) ([]byte, error) {
-	return Decrypt(priv, data)
+	return DecryptAsn1(priv, data)
 }
 
 func (pub *PublicKey) Verify(msg []byte, sign []byte) bool {
@@ -79,15 +100,16 @@ func (pub *PublicKey) Verify(msg []byte, sign []byte) bool {
 	if err != nil {
 		return false
 	}
-	return Sm2Verify(pub, msg, nil, sm2Sign.R, sm2Sign.S)
+	return Sm2Verify(pub, msg, default_uid, sm2Sign.R, sm2Sign.S)
 	// return Verify(pub, msg, sm2Sign.R, sm2Sign.S)
 }
 
 func (pub *PublicKey) Encrypt(data []byte) ([]byte, error) {
-	return Encrypt(pub, data)
+	return EncryptAsn1(pub, data)
 }
 
 var one = new(big.Int).SetInt64(1)
+var two = new(big.Int).SetInt64(2)
 
 func intToBytes(x int) []byte {
 	var buf = make([]byte, 4)
@@ -96,15 +118,16 @@ func intToBytes(x int) []byte {
 	return buf
 }
 
-func kdf(x, y []byte, length int) ([]byte, bool) {
+func kdf(length int, x ...[]byte) ([]byte, bool) {
 	var c []byte
 
 	ct := 1
 	h := sm3.New()
-	x = append(x, y...)
 	for i, j := 0, (length+31)/32; i < j; i++ {
 		h.Reset()
-		h.Write(x)
+		for _, xx := range x {
+			h.Write(xx)
+		}
 		h.Write(intToBytes(ct))
 		hash := h.Sum(nil)
 		if i+1 == j && length%32 != 0 {
@@ -138,10 +161,16 @@ func randFieldElement(c elliptic.Curve, rand io.Reader) (k *big.Int, err error) 
 
 func GenerateKey() (*PrivateKey, error) {
 	c := P256Sm2()
-	k, err := randFieldElement(c, rand.Reader)
+	params := c.Params()
+	b := make([]byte, params.BitSize/8+8)
+	_, err := io.ReadFull(rand.Reader, b)
 	if err != nil {
 		return nil, err
 	}
+	k := new(big.Int).SetBytes(b)
+	n := new(big.Int).Sub(params.N, two)
+	k.Mod(k, n)
+	k.Add(k, one)
 	priv := new(PrivateKey)
 	priv.PublicKey.Curve = c
 	priv.D = k
@@ -250,6 +279,9 @@ func Verify(pub *PublicKey, hash []byte, r, s *big.Int) bool {
 }
 
 func Sm2Sign(priv *PrivateKey, msg, uid []byte) (r, s *big.Int, err error) {
+	if len(uid) == 0 {
+		uid = default_uid
+	}
 	za, err := ZA(&priv.PublicKey, uid)
 	if err != nil {
 		return nil, nil, err
@@ -304,6 +336,9 @@ func Sm2Verify(pub *PublicKey, msg, uid []byte, r, s *big.Int) bool {
 	if r.Cmp(N) >= 0 || s.Cmp(N) >= 0 {
 		return false
 	}
+	if len(uid) == 0 {
+		uid = default_uid
+	}
 	za, err := ZA(pub, uid)
 	if err != nil {
 		return false
@@ -336,9 +371,6 @@ func msgHash(za, msg []byte) (*big.Int, error) {
 
 // ZA = H256(ENTLA || IDA || a || b || xG || yG || xA || yA)
 func ZA(pub *PublicKey, uid []byte) ([]byte, error) {
-	if uid == nil {
-	   uid = defaultUID
-	}
 	za := sm3.New()
 	uidLen := len(uid)
 	if uidLen >= 8192 {
@@ -359,6 +391,9 @@ func ZA(pub *PublicKey, uid []byte) ([]byte, error) {
 	yBuf := pub.Y.Bytes()
 	if n := len(xBuf); n < 32 {
 		xBuf = append(zeroByteSlice()[:32-n], xBuf...)
+	}
+	if n := len(yBuf); n < 32 {
+		yBuf = append(zeroByteSlice()[:(32-n)], yBuf...)
 	}
 	za.Write(xBuf)
 	za.Write(yBuf)
@@ -421,7 +456,7 @@ func Encrypt(pub *PublicKey, data []byte) ([]byte, error) {
 		tm = append(tm, y2Buf...)
 		h := sm3.Sm3Sum(tm)
 		c = append(c, h...)
-		ct, ok := kdf(x2Buf, y2Buf, length) // 密文
+		ct, ok := kdf(length, x2Buf, y2Buf) // 密文
 		if !ok {
 			continue
 		}
@@ -448,7 +483,7 @@ func Decrypt(priv *PrivateKey, data []byte) ([]byte, error) {
 	if n := len(y2Buf); n < 32 {
 		y2Buf = append(zeroByteSlice()[:32-n], y2Buf...)
 	}
-	c, ok := kdf(x2Buf, y2Buf, length)
+	c, ok := kdf(length, x2Buf, y2Buf)
 	if !ok {
 		return nil, errors.New("Decrypt: failed to decrypt")
 	}
@@ -464,6 +499,177 @@ func Decrypt(priv *PrivateKey, data []byte) ([]byte, error) {
 		return c, errors.New("Decrypt: failed to decrypt")
 	}
 	return c, nil
+}
+
+/*
+sm2加密，返回asn.1编码格式的密文内容
+*/
+func EncryptAsn1(pub *PublicKey, data []byte) ([]byte, error) {
+	cipher, err := Encrypt(pub, data)
+	if err != nil {
+		return nil, err
+	}
+	return CipherMarshal(cipher)
+}
+
+/*
+sm2解密，解析asn.1编码格式的密文内容
+*/
+func DecryptAsn1(pub *PrivateKey, data []byte) ([]byte, error) {
+	cipher, err := CipherUnmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return Decrypt(pub, cipher)
+}
+
+/*
+*sm2密文转asn.1编码格式
+*sm2密文结构如下:
+*  x
+*  y
+*  hash
+*  CipherText
+ */
+func CipherMarshal(data []byte) ([]byte, error) {
+	data = data[1:]
+	x := new(big.Int).SetBytes(data[:32])
+	y := new(big.Int).SetBytes(data[32:64])
+	hash := data[64:96]
+	cipherText := data[96:]
+	return asn1.Marshal(sm2Cipher{x, y, hash, cipherText})
+}
+
+/*
+ASN1封装的SM2加密数据结构转换转C1|C3|C2拼接格式
+*/
+func CipherUnmarshal(data []byte) ([]byte, error) {
+	var cipher sm2Cipher
+	_, err := asn1.Unmarshal(data, &cipher)
+	if err != nil {
+		return nil, err
+	}
+	x := cipher.XCoordinate.Bytes()
+	y := cipher.YCoordinate.Bytes()
+
+	if n := len(x); n < 32 {
+		x = append(zeroByteSlice()[:32-n], x...)
+	}
+	if n := len(y); n < 32 {
+		y = append(zeroByteSlice()[:32-n], y...)
+	}
+
+	hash := cipher.HASH
+	cipherText := cipher.CipherText
+
+	res := make([]byte, 1+32+32+len(hash)+len(cipherText))
+
+	// 未压缩标识符
+	res[0] = 0x04
+	copy(res[1:], x)
+	copy(res[1+32:], y)
+	copy(res[1+64:], hash)
+	copy(res[1+96:], cipherText)
+	return res, nil
+}
+
+// keXHat 计算 x = 2^w + (x & (2^w-1))
+// 密钥协商算法辅助函数
+func keXHat(x *big.Int) (xul *big.Int) {
+	buf := x.Bytes()
+	for i := 0; i < len(buf)-16; i++ {
+		buf[i] = 0
+	}
+	if len(buf) >= 16 {
+		c := buf[len(buf)-16]
+		buf[len(buf)-16] = c & 0x7f
+	}
+
+	r := new(big.Int).SetBytes(buf)
+	_2w := new(big.Int).SetBytes([]byte{
+		0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	return r.Add(r, _2w)
+}
+
+// keyExchange 为SM2密钥交换算法的第二部和第三步复用部分，协商的双方均调用此函数计算共同的字节串
+//
+// klen: 密钥长度
+// ida, idb: 协商双方的标识，ida为密钥协商算法发起方标识，idb为响应方标识
+// pri: 函数调用者的密钥
+// pub: 对方的公钥
+// rpri: 函数调用者生成的临时SM2密钥
+// rpub: 对方发来的临时SM2公钥
+// thisIsA: 如果是A调用，文档中的协商第三步，设置为true，否则设置为false
+//
+// 返回 k 为klen长度的字节串
+func keyExchange(klen int, ida, idb []byte, pri *PrivateKey, pub *PublicKey, rpri *PrivateKey, rpub *PublicKey, thisISA bool) (k, s1, s2 []byte, err error) {
+	curve := P256Sm2()
+	N := curve.Params().N
+	x2hat := keXHat(rpri.PublicKey.X)
+	x2rb := new(big.Int).Mul(x2hat, rpri.D)
+	tbt := new(big.Int).Add(pri.D, x2rb)
+	tb := new(big.Int).Mod(tbt, N)
+	if !curve.IsOnCurve(rpub.X, rpub.Y) {
+		err = errors.New("Ra not on curve")
+		return
+	}
+	x1hat := keXHat(rpub.X)
+	ramx1, ramy1 := curve.ScalarMult(rpub.X, rpub.Y, x1hat.Bytes())
+	vxt, vyt := curve.Add(pub.X, pub.Y, ramx1, ramy1)
+
+	vx, vy := curve.ScalarMult(vxt, vyt, tb.Bytes())
+	pza := pub
+	if thisISA {
+		pza = &pri.PublicKey
+	}
+	za, err := ZA(pza, ida)
+	if err != nil {
+		return
+	}
+	zero := new(big.Int)
+	if vx.Cmp(zero) == 0 || vy.Cmp(zero) == 0 {
+		err = errors.New("V is infinite")
+	}
+	pzb := pub
+	if !thisISA {
+		pzb = &pri.PublicKey
+	}
+	zb, err := ZA(pzb, idb)
+	k, ok := kdf(klen, vx.Bytes(), vy.Bytes(), za, zb)
+	if !ok {
+		err = errors.New("kdf: zero key")
+		return
+	}
+	h1 := BytesCombine(vx.Bytes(), za, zb, rpub.X.Bytes(), rpub.Y.Bytes(), rpri.X.Bytes(), rpri.Y.Bytes())
+	if !thisISA {
+		h1 = BytesCombine(vx.Bytes(), za, zb, rpri.X.Bytes(), rpri.Y.Bytes(), rpub.X.Bytes(), rpub.Y.Bytes())
+	}
+	hash := sm3.Sm3Sum(h1)
+	h2 := BytesCombine([]byte{0x02}, vy.Bytes(), hash)
+	S1 := sm3.Sm3Sum(h2)
+	h3 := BytesCombine([]byte{0x03}, vy.Bytes(), hash)
+	S2 := sm3.Sm3Sum(h3)
+	return k, S1, S2, nil
+}
+func BytesCombine(pBytes ...[]byte) []byte {
+	len := len(pBytes)
+	s := make([][]byte, len)
+	for index := 0; index < len; index++ {
+		s[index] = pBytes[index]
+	}
+	sep := []byte("")
+	return bytes.Join(s, sep)
+}
+
+// KeyExchangeB 协商第二部，用户B调用， 返回共享密钥k
+func KeyExchangeB(klen int, ida, idb []byte, priB *PrivateKey, pubA *PublicKey, rpri *PrivateKey, rpubA *PublicKey) (k, s1, s2 []byte, err error) {
+	return keyExchange(klen, ida, idb, priB, pubA, rpri, rpubA, false)
+}
+
+// KeyExchangeA 协商第二部，用户A调用，返回共享密钥k
+func KeyExchangeA(klen int, ida, idb []byte, priA *PrivateKey, pubB *PublicKey, rpri *PrivateKey, rpubB *PublicKey) (k, s1, s2 []byte, err error) {
+	return keyExchange(klen, ida, idb, priA, pubB, rpri, rpubB, true)
 }
 
 type zr struct {
@@ -490,7 +696,7 @@ func Compress(a *PublicKey) []byte {
 	if n := len(a.X.Bytes()); n < 32 {
 		buf = append(zeroByteSlice()[:(32-n)], buf...)
 	}
-	buf = append([]byte{byte(yp)}, buf...)
+	buf = append([]byte{byte(yp + 2)}, buf...)
 	return buf
 }
 
@@ -509,7 +715,7 @@ func Decompress(a []byte) *PublicKey {
 
 	y2 := sm2P256ToBig(&xx3)
 	y := new(big.Int).ModSqrt(y2, sm2P256.P)
-	if getLastBit(y) != uint(a[0]) {
+	if getLastBit(y)+2 != uint(a[0]) {
 		y.Sub(sm2P256.P, y)
 	}
 	return &PublicKey{
