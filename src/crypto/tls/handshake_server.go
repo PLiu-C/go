@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sm/sm2"
 	"crypto/subtle"
 	"crypto/x509"
 	"errors"
@@ -251,7 +252,7 @@ func (hs *serverHandshakeState) processClientHello() error {
 
 	if priv, ok := hs.cert.PrivateKey.(crypto.Signer); ok {
 		switch priv.Public().(type) {
-		case *ecdsa.PublicKey:
+		case *ecdsa.PublicKey, *sm2.PublicKey:
 			hs.ecSignOk = true
 		case ed25519.PublicKey:
 			hs.ecSignOk = true

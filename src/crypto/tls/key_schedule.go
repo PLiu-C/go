@@ -7,6 +7,7 @@ package tls
 import (
 	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/sm/sm2"
 	"errors"
 	"hash"
 	"io"
@@ -138,6 +139,8 @@ func generateECDHEParameters(rand io.Reader, curveID CurveID) (ecdheParameters, 
 
 func curveForCurveID(id CurveID) (elliptic.Curve, bool) {
 	switch id {
+	case CurveP256SM2:
+		return sm2.P256Sm2(), true
 	case CurveP256:
 		return elliptic.P256(), true
 	case CurveP384:
