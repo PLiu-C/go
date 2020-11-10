@@ -28,7 +28,7 @@ type pkcs8 struct {
 
 // ParsePKCS8PrivateKey parses an unencrypted private key in PKCS#8, ASN.1 DER form.
 //
-// It returns a *rsa.PrivateKey, a *ecdsa.PrivateKey, or a ed25519.PrivateKey.
+// It returns a *rsa.PrivateKey, a *ecdsa.PrivateKey, *sm2.PrivateKey or a ed25519.PrivateKey.
 // More types might be supported in the future.
 //
 // This kind of key is commonly encoded in PEM blocks of type "PRIVATE KEY".
@@ -51,7 +51,7 @@ func ParsePKCS8PrivateKey(der []byte) (key interface{}, err error) {
 		}
 		return key, nil
 
-	case privKey.Algo.Algorithm.Equal(oidPublicKeyECDSA):
+	case privKey.Algo.Algorithm.Equal(oidPublicKeyECDSA) || privKey.Algo.Algorithm.Equal(oidPublicKeySM2):
 		bytes := privKey.Algo.Parameters.FullBytes
 		namedCurveOID := new(asn1.ObjectIdentifier)
 		if _, err := asn1.Unmarshal(bytes, namedCurveOID); err != nil {
