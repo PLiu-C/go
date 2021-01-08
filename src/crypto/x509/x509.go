@@ -34,10 +34,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"crypto/sm/sm2"
+	"reflect"
+
 	"golang.org/x/crypto/cryptobyte"
 	cryptobyte_asn1 "golang.org/x/crypto/cryptobyte/asn1"
-	"reflect"
-	"crypto/sm/sm2"
 )
 
 // pkixPublicKey reflects a PKIX public key structure. See SubjectPublicKeyInfo
@@ -1050,30 +1051,6 @@ type distributionPointName struct {
 func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (interface{}, error) {
 	asn1Data := keyData.PublicKey.RightAlign()
 	switch algo {
-	case SM2:
-		paramsData := keyData.Algorithm.Parameters.FullBytes
-		namedCurveOID := new(asn1.ObjectIdentifier)
-		rest, err := asn1.Unmarshal(paramsData, namedCurveOID)
-		if err != nil {
-			return nil, err
-		}
-		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after SM2 parameters")
-		}
-		namedCurve := namedCurveFromOID(*namedCurveOID)
-		if namedCurve == nil {
-			return nil, errors.New("x509: unsupported SM2 elliptic curve")
-		}
-		x, y := elliptic.Unmarshal(namedCurve, asn1Data)
-		if x == nil {
-			return nil, errors.New("x509: failed to unmarshal elliptic curve point")
-		}
-		pub := &sm2.PublicKey{
-			Curve: namedCurve,
-			X:     x,
-			Y:     y,
-		}
-		return pub, nil
 	case RSA:
 		// RSA public keys must have a NULL in the parameters.
 		// See RFC 3279, Section 2.3.1.
@@ -1132,15 +1109,15 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (interface{
 			Y: p,
 		}
 		return pub, nil
-	case ECDSA:
+	case ECDSA, SM2:
 		paramsData := keyData.Algorithm.Parameters.FullBytes
 		namedCurveOID := new(asn1.ObjectIdentifier)
 		rest, err := asn1.Unmarshal(paramsData, namedCurveOID)
 		if err != nil {
-			return nil, errors.New("x509: failed to parse ECDSA parameters as named curve")
+			return nil, errors.New("x509: failed to parse ECDSA/SM2 parameters as named curve")
 		}
 		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after ECDSA parameters")
+			return nil, errors.New("x509: trailing data after ECDSA/SM2 parameters")
 		}
 		namedCurve := namedCurveFromOID(*namedCurveOID)
 		if namedCurve == nil {
@@ -1149,6 +1126,15 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (interface{
 		x, y := elliptic.Unmarshal(namedCurve, asn1Data)
 		if x == nil {
 			return nil, errors.New("x509: failed to unmarshal elliptic curve point")
+		}
+
+		if namedCurveOID.Equal(oidNamedCurveP256SM2) {
+			pub := &sm2.PublicKey{
+				Curve: namedCurve,
+				X:     x,
+				Y:     y,
+			}
+			return pub, nil
 		}
 		pub := &ecdsa.PublicKey{
 			Curve: namedCurve,
