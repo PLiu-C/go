@@ -720,3 +720,29 @@ func Decompress(a []byte) *PublicKey {
 		Y:     y,
 	}
 }
+
+// PLIU: added since go 1.18.8
+
+func (pub *PublicKey) Equal(x crypto.PublicKey) bool {
+	xx, ok := x.(*PublicKey)
+	if !ok {
+		return false
+	}
+	return pub.X.Cmp(xx.X) == 0 && pub.Y.Cmp(xx.Y) == 0 &&
+		// Standard library Curve implementations are singletons, so this check
+		// will work for those. Other Curves might be equivalent even if not
+		// singletons, but there is no definitive way to check for that, and
+		// better to err on the side of safety.
+		pub.Curve == xx.Curve
+}
+
+// Equal reports whether priv and x have the same value.
+//
+// See PublicKey.Equal for details on how Curve is compared.
+func (priv *PrivateKey) Equal(x crypto.PrivateKey) bool {
+	xx, ok := x.(*PrivateKey)
+	if !ok {
+		return false
+	}
+	return priv.PublicKey.Equal(&xx.PublicKey) && priv.D.Cmp(xx.D) == 0
+}
